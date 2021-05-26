@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.xlarge
+    Description: Enter instance size. Default is t2.xlarge.
+    AllowedValues: [t2.medium, t2.xlarge, t2.2xlarge, t3.xlarge, t3.2xlarge]
+  AMI:
+    Type: String
+    Default: ami-09e67e426f25ce0d7
+    Description: The Ubuntu 20.04 to use.
+  Key:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: Free5gc VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: us-east-1a
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref PublicSubnet
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "Internet Group"
+      GroupDescription: "SSH traffic in, all traffic out."
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref free5gc
+  free5gc:
+    Type: 'AWS::EC2::Instance'
+        
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      ImageId: !Ref AMI
+      InstanceType:
+        Ref: InstanceTypeParameter
+      KeyName: !Ref Key
+      SecurityGroupIds:
+        - Ref: InstanceSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 160
+      Tags:
+        -
+          Key: Name
+          Value: Free5gc Server
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          wget https://dl.google.com/go/go1.14.4.linux-amd64.tar.gz
+          sudo tar -C /usr/local -zxvf go1.14.4.linux-amd64.tar.gz
+          mkdir -p ~/go/{bin,pkg,src}
+          # The following assume that your shell is bash
+          echo 'export GOPATH=$HOME/go' >> ~/.bashrc
+          echo 'export GOROOT=/usr/local/go' >> ~/.bashrc
+          echo 'export PATH=$PATH:$GOPATH/bin:$GOROOT/bin' >> ~/.bashrc
+          echo 'export GO111MODULE=auto' >> ~/.bashrc
+          source ~/.bashrc
+          sudo apt -y update
+          sudo apt -y install mongodb wget git
+          sudo systemctl start mongodb
+          sudo apt -y update
+          sudo apt -y install git gcc cmake autoconf libtool pkg-config libmnl-dev libyaml-dev
+          go get -u github.com/sirupsen/logrus
+          cd ~
+          git clone --recursive https://github.com/williamlin0504/free5gcWithOCF.git
+          cd free5gcWithOCF
+          make
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created EC2 instance
+    Value: !Ref 'free5gc'
+  PublicIP:
+    Description: Public IP address of the newly created EC2 instance
+    Value: !GetAtt [free5gc, PublicIp]
